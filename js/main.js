@@ -42,7 +42,8 @@
 		muted: false,
 		lastFrame: 0,
 		lastWarn: -1,
-		modalAction: null
+		modalAction: null,
+		modalCancel: null
 	}
 
 	/**
@@ -411,11 +412,63 @@
 		renderButtons()
 	}
 
+	// Mensagens sorteadas na tela de pausa.
+	var PAUSE_MESSAGES = [
+		{
+			title: 'PAUSA PRO CAFÉ',
+			body: 'O forno ficou em fogo baixo. Nada vai queimar enquanto você respira.',
+			no: 'VOLTAR AO FORNO'
+		},
+		{
+			title: 'INTERVALO!',
+			body: 'O pizzaiolo foi buscar mais muçarela. A fatia do centro está <span class="highlight">guardadinha</span>.',
+			no: 'BORA!'
+		},
+		{
+			title: 'MASSA DESCANSANDO',
+			body: 'Toda boa massa precisa descansar. O relógio parou e espera por você.',
+			no: 'PODE ASSAR'
+		},
+		{
+			title: 'FORNO EM ESPERA',
+			body: 'Os clientes estão pacientes... por enquanto. Ninguém vai reclamar da demora.',
+			no: 'ATENDER PEDIDOS'
+		}
+	]
+
+	// Pausa automática ao trocar de aba.
+	var AWAY_MESSAGE = {
+		title: 'SAIU PRA ENTREGA?',
+		body: 'Você saiu e a gente segurou o forno pra você. <span class="highlight">Nenhuma pizza queimou.</span>',
+		no: 'VOLTEI!'
+	}
+
+	// Pausa e mostra a tela de pausa (o "continuar" fica em destaque).
+	function showPause(away)
+	{
+		if (game.status === 'playing') pause()
+
+		if (game.status !== 'paused' || !el.modal.hidden) return
+
+		var msg = away === true ? AWAY_MESSAGE : PAUSE_MESSAGES[Math.floor(Math.random() * PAUSE_MESSAGES.length)]
+		var hl = function (value) { return '<span class="highlight">' + value + '</span>' }
+
+		openModal(
+			msg.title,
+			'<p>' + msg.body + '</p>' +
+			'<p class="stats">PONTOS ' + hl(game.score) + ' &middot; FASE ' + hl(level()) + ' &middot; VIDAS ' + hl(game.lives) + '</p>',
+			'REINICIAR',
+			requestRestart,
+			msg.no,
+			start
+		)
+	}
+
 	function togglePause()
 	{
 		if (game.status === 'playing')
 		{
-			pause()
+			showPause()
 		}
 		else
 		{
@@ -460,6 +513,83 @@
 		showRand(0)
 		renderHud()
 		renderButtons()
+	}
+
+	// Mensagens sorteadas ao pedir para reiniciar no meio de uma partida.
+	// {perda} vira, por exemplo, "12 pontos e 5 fatias".
+	var RESTART_MESSAGES = [
+		{
+			title: 'JOGAR FORA?',
+			body: 'Essas pizzas ainda estão <span class="highlight">quentinhas</span>! Se reiniciar, adeus a {perda}.',
+			yes: 'PODE JOGAR',
+			no: 'NÃO, VOU COMER!'
+		},
+		{
+			title: 'CALMA, PIZZAIOLO!',
+			body: 'O forno ainda está ligado! Quer mesmo jogar fora {perda} e sovar a massa do zero?',
+			yes: 'SOVAR DE NOVO',
+			no: 'VOLTAR AO FORNO'
+		},
+		{
+			title: 'MAMMA MIA!',
+			body: 'A nonna levou anos pra aprender essa receita. Reiniciar agora joga fora {perda}.',
+			yes: 'SIM, RECOMEÇAR',
+			no: 'DESCULPA, NONNA'
+		},
+		{
+			title: 'E O DELIVERY?',
+			body: 'Tem cliente esperando no balcão! Se reiniciar, o pedido com {perda} vai pro lixo.',
+			yes: 'CANCELAR PEDIDO',
+			no: 'SAIR PRA ENTREGA'
+		}
+	]
+
+	// O que o jogador perde ao reiniciar ("" se não há nada a perder).
+	function progressLost()
+	{
+		var slices = 0
+		var parts = []
+
+		for (var i = 1; i <= PIZZAS; i++)
+		{
+			for (var s = 1; s <= SLICES; s++)
+			{
+				if (game.pizzas[i][s]) slices++
+			}
+		}
+
+		if (game.score > 0) parts.push(game.score + (game.score == 1 ? ' ponto' : ' pontos'))
+		if (slices > 0) parts.push(slices + (slices == 1 ? ' fatia' : ' fatias'))
+
+		return parts.join(' e ')
+	}
+
+	// Pede confirmação antes de reiniciar uma partida em andamento.
+	function requestRestart()
+	{
+		var lost = progressLost()
+
+		if ((game.status !== 'playing' && game.status !== 'paused') || !lost)
+		{
+			restart()
+
+			return
+		}
+
+		var wasPlaying = game.status === 'playing'
+		var msg = RESTART_MESSAGES[Math.floor(Math.random() * RESTART_MESSAGES.length)]
+
+		pause()
+
+		openModal(
+			msg.title,
+			'<p>' + msg.body.replace('{perda}', '<span class="highlight">' + lost + '</span>') + '</p>',
+			msg.yes,
+			restart,
+			msg.no,
+			// Desistiu de reiniciar: volta ao jogo, ou à tela de pausa se veio dela.
+			function () { if (wasPlaying) start(); else showPause() }
+		)
 	}
 
 	function restart()
@@ -615,18 +745,24 @@
 	/**
 	 * Janela de mensagens.
 	**/
-	function openModal(title, html, button, action)
+	// Com cancelButton, mostra um segundo botão (em destaque e com o foco).
+	function openModal(title, html, button, action, cancelButton, cancelAction)
 	{
 		el.modalTitle.textContent = title
 		el.modalBody.innerHTML = html
 		el.modalOk.textContent = button
+		el.modalCancel.textContent = cancelButton || ''
+		el.modalCancel.hidden = !cancelButton
 		el.modal.hidden = false
 
 		game.modalAction = action
+		game.modalCancel = cancelButton ? cancelAction : null
 
 		positionModal()
 
-		setTimeout(function () { el.modalOk.focus() }, 50)
+		var focus = cancelButton ? el.modalCancel : el.modalOk
+
+		setTimeout(function () { focus.focus() }, 50)
 	}
 
 	// Centraliza a caixa no meio do tabuleiro (não da janela), sem sair da tela.
@@ -642,15 +778,22 @@
 		box.style.marginTop = Math.max(0, Math.min(middle - 16 - box.offsetHeight / 2, free)) + 'px'
 	}
 
-	function closeModal()
+	function closeModal(confirmed)
 	{
-		var action = game.modalAction
+		var action = confirmed ? game.modalAction : game.modalCancel
 
 		el.modal.hidden = true
 
 		game.modalAction = null
+		game.modalCancel = null
 
 		if (action) action()
+	}
+
+	// Esc cancela quando existe essa opção; senão, faz a ação principal.
+	function dismissModal()
+	{
+		closeModal(!game.modalCancel)
 	}
 
 	function showHelp()
@@ -690,7 +833,19 @@
 
 		if (!el.modal.hidden)
 		{
-			if (e.key === 'Escape') closeModal()
+			if (e.key === 'Escape')
+			{
+				dismissModal()
+			}
+			else if ((e.key === ' ' || e.key.toLowerCase() === 'p') && game.status === 'paused' && game.modalCancel)
+			{
+				// Espaço/P na pausa: volta ao jogo (o "cancelar" é sempre o lado seguro).
+				e.preventDefault()
+
+				if (document.activeElement) document.activeElement.blur()
+
+				dismissModal()
+			}
 
 			return
 		}
@@ -712,7 +867,7 @@
 		}
 		else if (key === 'r')
 		{
-			restart()
+			requestRestart()
 		}
 		else if (key === 'm')
 		{
@@ -739,6 +894,7 @@
 		el.modalTitle = document.getElementById('modal-title')
 		el.modalBody = document.getElementById('modal-body')
 		el.modalOk = document.getElementById('modal-ok')
+		el.modalCancel = document.getElementById('modal-cancel')
 
 		game.record = parseInt(storageGet(STORAGE_RECORD), 10) || 0
 		game.muted = storageGet(STORAGE_MUTED) === '1'
@@ -749,10 +905,11 @@
 		reset()
 
 		el.btnPlay.addEventListener('click', onClick(start))
-		el.btnPause.addEventListener('click', onClick(pause))
-		el.btnReload.addEventListener('click', onClick(restart))
+		el.btnPause.addEventListener('click', onClick(showPause))
+		el.btnReload.addEventListener('click', onClick(requestRestart))
 		el.btnSound.addEventListener('click', onClick(toggleMute))
-		el.modalOk.addEventListener('click', closeModal)
+		el.modalOk.addEventListener('click', function () { closeModal(true) })
+		el.modalCancel.addEventListener('click', function () { closeModal(false) })
 
 		document.addEventListener('keydown', onKeyDown)
 
@@ -762,7 +919,7 @@
 
 		// Pausa sozinho ao trocar de aba.
 		document.addEventListener('visibilitychange', function () {
-			if (document.hidden) pause()
+			if (document.hidden) showPause(true)
 		})
 
 		game.lastFrame = performance.now()
