@@ -1,4 +1,4 @@
-# Jogo da Pizza
+# Pizza Click
 
 Jogo de raciocínio rápido feito em HTML, CSS e JavaScript puro, sem dependências.
 
