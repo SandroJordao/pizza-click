@@ -22,6 +22,9 @@
 
 	var STORAGE_RECORD = 'pizza.record'
 	var STORAGE_MUTED = 'pizza.muted'
+	var STORAGE_NAME = 'pizza.name'
+
+	var RANKING_URL = 'api/ranking.php'
 
 	var el = {}
 
@@ -42,8 +45,9 @@
 		muted: false,
 		lastFrame: 0,
 		lastWarn: -1,
-		modalAction: null,
-		modalCancel: null
+		modal: null,         // janela aberta: { escape, pauseKeys }
+		playerName: '',
+		menuIndex: 0
 	}
 
 	/**
@@ -107,7 +111,15 @@
 
 		storageSet(STORAGE_MUTED, game.muted ? '1' : '0')
 
-		el.btnSound.classList.toggle('muted', game.muted)
+		renderSound()
+
+		sound('place')
+	}
+
+	function renderSound()
+	{
+		el.soundState.textContent = game.muted ? 'DESLIGADO' : 'LIGADO'
+		el.menuSound.setAttribute('aria-pressed', String(!game.muted))
 	}
 
 	/**
@@ -368,14 +380,247 @@
 			sound('gameover')
 		}, 300)
 
-		openModal(
-			'GAME OVER',
+		var html =
 			'<p>PONTOS: <span class="highlight">' + game.score + '</span></p>' +
 			'<p>PIZZAS: ' + game.completed + ' &middot; TEMPO: ' + secToTime(Math.floor(game.playTime / 1000)) + '</p>' +
-			(newRecord && game.score > 0 ? '<p class="highlight">NOVO RECORDE!</p>' : '<p>RECORDE: ' + game.record + '</p>'),
-			'JOGAR DE NOVO',
-			restart
+			(newRecord && game.score > 0 ? '<p class="highlight">NOVO RECORDE!</p>' : '<p>RECORDE: ' + game.record + '</p>')
+
+		// Sem pontos não há o que gravar no ranking.
+		if (game.score == 0)
+		{
+			openModal('GAME OVER', html, [
+				{ label: 'INÍCIO', action: goHome },
+				{ label: 'JOGAR DE NOVO', action: restart, primary: true }
+			], { escape: goHome })
+
+			return
+		}
+
+		openModal(
+			'GAME OVER',
+			html +
+			'<form class="rank-form" id="rank-form" novalidate>' +
+				'<label for="rank-name">COLOQUE SEU NOME NO RANKING</label>' +
+				'<input id="rank-name" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="SEU NOME">' +
+				'<p class="rank-msg" id="rank-msg" role="status"></p>' +
+			'</form>',
+			[
+				{ label: 'INÍCIO', action: goHome },
+				{ label: 'JOGAR DE NOVO', action: restart },
+				{ label: 'SALVAR', action: submitScore, primary: true, keepOpen: true }
+			],
+			{ focus: '#rank-name' }
 		)
+
+		var input = document.getElementById('rank-name')
+
+		input.value = game.playerName
+		input.select()
+
+		document.getElementById('rank-form').addEventListener('submit', function (e) {
+			e.preventDefault()
+
+			submitScore()
+		})
+	}
+
+	/**
+	 * Ranking (api/ranking.php).
+	**/
+	var savingScore = false
+
+	function submitScore()
+	{
+		if (savingScore) return
+
+		var input = document.getElementById('rank-name')
+		var msg = document.getElementById('rank-msg')
+		var name = input.value.replace(/\s+/g, ' ').trim()
+
+		if (!/^[\p{L}\p{N} ._-]{2,16}$/u.test(name))
+		{
+			msg.textContent = 'Use de 2 a 16 letras ou números.'
+			input.focus()
+
+			return
+		}
+
+		savingScore = true
+		msg.textContent = 'SALVANDO...'
+
+		fetch(RANKING_URL, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				name: name,
+				score: game.score,
+				pizzas: game.completed,
+				level: level(),
+				time: Math.max(1, Math.floor(game.playTime / 1000))
+			})
+		})
+		.then(function (response) { return response.json() })
+		.then(function (data) {
+			savingScore = false
+
+			if (!data.ok)
+			{
+				var error = new Error(data.error)
+
+				error.fromServer = true
+
+				throw error
+			}
+
+			game.playerName = name
+			storageSet(STORAGE_NAME, name)
+
+			showRankingTable(data, null, true)
+		})
+		.catch(function (error) {
+			savingScore = false
+
+			// A janela pode ter sido fechada enquanto salvava.
+			if (!document.getElementById('rank-msg')) return
+
+			msg.textContent = error.fromServer
+				? error.message
+				: 'Não foi possível salvar agora. Tente de novo.'
+		})
+	}
+
+	// Busca o ranking e mostra. back: ação do botão principal.
+	function showRanking(back)
+	{
+		fetch(RANKING_URL)
+			.then(function (response) { return response.json() })
+			.then(function (result) {
+				if (!result.ok) throw new Error()
+
+				showRankingTable(result, back)
+			})
+			.catch(function () {
+				showRankingTable(null, back)
+			})
+	}
+
+	/**
+	 * Mostra o ranking.
+	 *
+	 * data:      resposta da API ({ top, position, entry }), ou null se falhou.
+	 * back:      ação do "VOLTAR".
+	 * afterGame: aberto depois de salvar a partida (botões INÍCIO e JOGAR DE NOVO).
+	**/
+	function showRankingTable(data, back, afterGame)
+	{
+		var html = ''
+
+		if (!data)
+		{
+			html = '<p>O ranking está indisponível agora.</p>'
+		}
+		else if (!data.top.length)
+		{
+			html = '<p>Ninguém no ranking ainda. Seja o primeiro pizzaiolo!</p>'
+		}
+		else
+		{
+			var mine = data.position || 0
+
+			html = '<table class="ranking">'
+
+			data.top.forEach(function (entry, i) {
+				html += rankingRow(i + 1, entry, i + 1 === mine)
+			})
+
+			// Fora do top 10: mostra a posição do jogador embaixo.
+			if (mine > data.top.length && data.entry)
+			{
+				html += '<tr class="gap"><td colspan="3">...</td></tr>' + rankingRow(mine, data.entry, true)
+			}
+
+			html += '</table>'
+
+			if (data.position && data.improved === false)
+			{
+				html += '<p class="stats">Seu melhor continua sendo ' + data.entry.score + ' pontos.</p>'
+			}
+
+			html += '<p class="stats">Clique em um jogador para ver os detalhes.</p>'
+		}
+
+		var buttons = afterGame
+			? [{ label: 'INÍCIO', action: goHome }, { label: 'JOGAR DE NOVO', action: restart, primary: true }]
+			: [{ label: 'VOLTAR', action: back, primary: true }]
+
+		openModal('RANKING', html, buttons, { escape: afterGame ? goHome : back })
+
+		// Linhas clicáveis: abrem os detalhes do jogador.
+		el.modalBody.querySelectorAll('tr[data-position]').forEach(function (row) {
+			var open = function () {
+				var position = parseInt(row.getAttribute('data-position'), 10)
+				var entry = position <= data.top.length ? data.top[position - 1] : data.entry
+
+				closeModal(function () {
+					showRankingDetail(entry, position, function () { showRankingTable(data, back, afterGame) })
+				})
+			}
+
+			row.addEventListener('click', open)
+			row.addEventListener('keydown', function (e) {
+				if (e.key === 'Enter' || e.key === ' ')
+				{
+					e.preventDefault()
+
+					open()
+				}
+			})
+		})
+	}
+
+	function rankingRow(position, entry, mine)
+	{
+		return '<tr tabindex="0" data-position="' + position + '"' + (mine ? ' class="mine"' : '') + '>' +
+			'<td>' + position + 'º</td>' +
+			'<td>' + escapeHtml(entry.name) + '</td>' +
+			'<td>' + entry.score + '</td>' +
+		'</tr>'
+	}
+
+	var RANK_TITLES = ['MESTRE PIZZAIOLO', 'SUB-CHEF', 'FORNEIRO']
+
+	function showRankingDetail(entry, position, back)
+	{
+		var date = new Date(entry.date)
+		var pad = function (n) { return n < 10 ? '0' + n : '' + n }
+		var when = isNaN(date)
+			? '-'
+			: pad(date.getDate()) + '/' + pad(date.getMonth() + 1) + '/' + date.getFullYear() + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes())
+		var row = function (label, value) { return '<tr><td>' + label + '</td><td>' + value + '</td></tr>' }
+
+		openModal(
+			entry.name,
+			'<p class="highlight">' + position + 'º LUGAR &middot; ' + (RANK_TITLES[position - 1] || 'APRENDIZ DE PIZZAIOLO') + '</p>' +
+			'<table class="ranking detail">' +
+				row('PONTOS', entry.score) +
+				row('PIZZAS', entry.pizzas) +
+				row('FASE', entry.level) +
+				row('TEMPO', secToTime(entry.time)) +
+				row('MÉDIA', (entry.score / Math.max(1, entry.pizzas)).toFixed(1).replace('.', ',') + ' pts/pizza') +
+				row('DATA', when) +
+			'</table>',
+			[{ label: 'VOLTAR', action: back, primary: true }],
+			{ escape: back }
+		)
+	}
+
+	function escapeHtml(text)
+	{
+		var div = document.createElement('div')
+
+		div.textContent = text
+
+		return div.innerHTML
 	}
 
 	/**
@@ -457,10 +702,11 @@
 			msg.title,
 			'<p>' + msg.body + '</p>' +
 			'<p class="stats">PONTOS ' + hl(game.score) + ' &middot; FASE ' + hl(level()) + ' &middot; VIDAS ' + hl(game.lives) + '</p>',
-			'REINICIAR',
-			requestRestart,
-			msg.no,
-			start
+			[
+				{ label: 'SAIR', action: requestExit },
+				{ label: msg.no, action: start, primary: true }
+			],
+			{ escape: start, pauseKeys: true }
 		)
 	}
 
@@ -515,36 +761,39 @@
 		renderButtons()
 	}
 
-	// Mensagens sorteadas ao pedir para reiniciar no meio de uma partida.
+	// Mensagens sorteadas ao pedir para sair no meio de uma partida.
 	// {perda} vira, por exemplo, "12 pontos e 5 fatias".
-	var RESTART_MESSAGES = [
+	var EXIT_MESSAGES = [
 		{
 			title: 'JOGAR FORA?',
-			body: 'Essas pizzas ainda estão <span class="highlight">quentinhas</span>! Se reiniciar, adeus a {perda}.',
+			body: 'Essas pizzas ainda estão <span class="highlight">quentinhas</span>! Se sair agora, adeus a {perda}.',
 			yes: 'PODE JOGAR',
 			no: 'NÃO, VOU COMER!'
 		},
 		{
 			title: 'CALMA, PIZZAIOLO!',
-			body: 'O forno ainda está ligado! Quer mesmo jogar fora {perda} e sovar a massa do zero?',
-			yes: 'SOVAR DE NOVO',
+			body: 'O forno ainda está ligado! Quer mesmo largar {perda} e ir embora?',
+			yes: 'VOU EMBORA',
 			no: 'VOLTAR AO FORNO'
 		},
 		{
 			title: 'MAMMA MIA!',
-			body: 'A nonna levou anos pra aprender essa receita. Reiniciar agora joga fora {perda}.',
-			yes: 'SIM, RECOMEÇAR',
+			body: 'A nonna levou anos pra aprender essa receita. Sair agora joga fora {perda}.',
+			yes: 'SIM, SAIR',
 			no: 'DESCULPA, NONNA'
 		},
 		{
-			title: 'E O DELIVERY?',
-			body: 'Tem cliente esperando no balcão! Se reiniciar, o pedido com {perda} vai pro lixo.',
-			yes: 'CANCELAR PEDIDO',
-			no: 'SAIR PRA ENTREGA'
+			title: 'FECHAR A PIZZARIA?',
+			body: 'Tem cliente esperando no balcão! Sair agora deixa pra trás {perda}.',
+			yes: 'FECHAR A LOJA',
+			no: 'VOLTAR AO BALCÃO'
 		}
 	]
 
-	// O que o jogador perde ao reiniciar ("" se não há nada a perder).
+	// Quando ainda não há nada a perder.
+	var NOTHING_LOST = 'uma pizzaria recém-aberta'
+
+	// O que o jogador perde ao sair ("" se não há nada a perder).
 	function progressLost()
 	{
 		var slices = 0
@@ -564,31 +813,32 @@
 		return parts.join(' e ')
 	}
 
-	// Pede confirmação antes de reiniciar uma partida em andamento.
-	function requestRestart()
+	// Pede confirmação antes de sair da partida e voltar à tela inicial.
+	function requestExit()
 	{
-		var lost = progressLost()
-
-		if ((game.status !== 'playing' && game.status !== 'paused') || !lost)
+		if (game.status !== 'playing' && game.status !== 'paused')
 		{
-			restart()
+			goHome()
 
 			return
 		}
 
 		var wasPlaying = game.status === 'playing'
-		var msg = RESTART_MESSAGES[Math.floor(Math.random() * RESTART_MESSAGES.length)]
+		var msg = EXIT_MESSAGES[Math.floor(Math.random() * EXIT_MESSAGES.length)]
+
+		// Desistiu de sair: volta ao jogo, ou à tela de pausa se veio dela.
+		var cancel = function () { if (wasPlaying) start(); else showPause() }
 
 		pause()
 
 		openModal(
 			msg.title,
-			'<p>' + msg.body.replace('{perda}', '<span class="highlight">' + lost + '</span>') + '</p>',
-			msg.yes,
-			restart,
-			msg.no,
-			// Desistiu de reiniciar: volta ao jogo, ou à tela de pausa se veio dela.
-			function () { if (wasPlaying) start(); else showPause() }
+			'<p>' + msg.body.replace('{perda}', '<span class="highlight">' + (progressLost() || NOTHING_LOST) + '</span>') + '</p>',
+			[
+				{ label: msg.yes, action: goHome },
+				{ label: msg.no, action: cancel, primary: true }
+			],
+			{ escape: cancel }
 		)
 	}
 
@@ -664,12 +914,6 @@
 
 	function renderButtons()
 	{
-		var playing = game.status === 'playing'
-
-		el.btnPlay.hidden = playing
-		el.btnPause.hidden = !playing
-		el.btnReload.hidden = game.status === 'idle'
-
 		el.board.classList.toggle('paused', game.status === 'paused')
 	}
 
@@ -745,24 +989,55 @@
 	/**
 	 * Janela de mensagens.
 	**/
-	// Com cancelButton, mostra um segundo botão (em destaque e com o foco).
-	function openModal(title, html, button, action, cancelButton, cancelAction)
+	/**
+	 * Abre a janela de mensagens.
+	 *
+	 * buttons: [{ label, action, primary, keepOpen }]. O botão primary fica
+	 *          em destaque e recebe o foco; keepOpen não fecha a janela.
+	 * options: { escape: ação do Esc, pauseKeys: Espaço/P também fazem o Esc,
+	 *            focus: seletor do campo que recebe o foco }
+	**/
+	function openModal(title, html, buttons, options)
 	{
+		options = options || {}
+
+		var focus = null
+
 		el.modalTitle.textContent = title
 		el.modalBody.innerHTML = html
-		el.modalOk.textContent = button
-		el.modalCancel.textContent = cancelButton || ''
-		el.modalCancel.hidden = !cancelButton
-		el.modal.hidden = false
+		el.modalActions.textContent = ''
 
-		game.modalAction = action
-		game.modalCancel = cancelButton ? cancelAction : null
+		buttons.forEach(function (b) {
+			var button = document.createElement('button')
+
+			button.type = 'button'
+			button.className = 'modal-btn' + (b.primary ? ' primary' : '')
+			button.textContent = b.label
+			button.addEventListener('click', function () {
+				if (b.keepOpen)
+				{
+					b.action()
+				}
+				else
+				{
+					closeModal(b.action)
+				}
+			})
+
+			if (b.primary || !focus) focus = button
+
+			el.modalActions.appendChild(button)
+		})
+
+		game.modal = { escape: options.escape || null, pauseKeys: !!options.pauseKeys }
+
+		el.modal.hidden = false
 
 		positionModal()
 
-		var focus = cancelButton ? el.modalCancel : el.modalOk
+		if (options.focus) focus = el.modalBody.querySelector(options.focus)
 
-		setTimeout(function () { focus.focus() }, 50)
+		setTimeout(function () { if (focus) focus.focus() }, 50)
 	}
 
 	// Centraliza a caixa no meio do tabuleiro (não da janela), sem sair da tela.
@@ -772,28 +1047,122 @@
 
 		var box = el.modal.firstElementChild
 		var center = el.center.getBoundingClientRect()
-		var middle = center.top + center.height / 2
+
+		// Na tela inicial o tabuleiro está escondido: usa o meio da janela.
+		var middle = el.game.hidden ? window.innerHeight / 2 : center.top + center.height / 2
 		var free = window.innerHeight - box.offsetHeight - 32
 
 		box.style.marginTop = Math.max(0, Math.min(middle - 16 - box.offsetHeight / 2, free)) + 'px'
 	}
 
-	function closeModal(confirmed)
+	function closeModal(action)
 	{
-		var action = confirmed ? game.modalAction : game.modalCancel
-
 		el.modal.hidden = true
 
-		game.modalAction = null
-		game.modalCancel = null
+		game.modal = null
 
 		if (action) action()
 	}
 
-	// Esc cancela quando existe essa opção; senão, faz a ação principal.
 	function dismissModal()
 	{
-		closeModal(!game.modalCancel)
+		if (game.modal && game.modal.escape) closeModal(game.modal.escape)
+	}
+
+	/**
+	 * Tela inicial.
+	**/
+	function buildHome()
+	{
+		// Pizza que se monta sozinha, fatia por fatia.
+		for (var s = 1; s <= SLICES; s++)
+		{
+			var img = document.createElement('img')
+
+			img.src = 'img/slice-' + s + '.png'
+			img.alt = ''
+			img.style.setProperty('--i', s - 1)
+
+			el.heroPizza.appendChild(img)
+		}
+
+		// Fatias caindo ao fundo.
+		for (var i = 0; i < 12; i++)
+		{
+			var drop = document.createElement('img')
+			var size = 40 + Math.random() * 50
+
+			drop.src = 'img/slice-' + (1 + i % SLICES) + '.png'
+			drop.alt = ''
+			drop.style.left = (i / 12 * 100 + Math.random() * 6) + '%'
+			drop.style.width = size + 'px'
+			drop.style.animationDuration = (9 + Math.random() * 9) + 's'
+			drop.style.animationDelay = (-Math.random() * 18) + 's'
+			drop.style.setProperty('--spin', (Math.random() < 0.5 ? -1 : 1) * (180 + Math.random() * 360) + 'deg')
+
+			el.rain.appendChild(drop)
+		}
+	}
+
+	function showHome()
+	{
+		el.game.hidden = true
+		el.home.hidden = false
+
+		el.homeRecord.textContent = game.record
+
+		// 1º lugar do ranking no rodapé (se o servidor responder).
+		fetch(RANKING_URL)
+			.then(function (response) { return response.json() })
+			.then(function (data) {
+				var first = data.ok && data.top[0]
+
+				el.homeTop.hidden = !first
+
+				if (!first) return
+
+				el.homeTopName.textContent = first.name
+				el.homeTopScore.textContent = first.score
+			})
+			.catch(function () { el.homeTop.hidden = true })
+
+		focusMenu()
+	}
+
+	// Sai da partida (já confirmado) e volta para a tela inicial.
+	function goHome()
+	{
+		reset()
+		showHome()
+	}
+
+	function startGame()
+	{
+		el.home.hidden = true
+		el.game.hidden = false
+
+		restart()
+	}
+
+	function focusMenu()
+	{
+		if (el.home.hidden || !el.modal.hidden) return
+
+		var items = el.menu.querySelectorAll('.menu-item')
+		var current = items[game.menuIndex] || items[0]
+
+		setTimeout(function () { current.focus() }, 50)
+	}
+
+	// Setas para cima/baixo percorrem o menu, como num fliperama.
+	function moveMenu(step)
+	{
+		var items = Array.prototype.slice.call(el.menu.querySelectorAll('.menu-item'))
+		var index = items.indexOf(document.activeElement)
+
+		index = index < 0 ? 0 : (index + step + items.length) % items.length
+
+		items[index].focus()
 	}
 
 	function showHelp()
@@ -806,10 +1175,13 @@
 				'<li>Complete as 7 fatias para fechar a pizza. Pizzas seguidas sem errar valem <span class="highlight">combo</span>.</li>' +
 				'<li>Se o tempo acabar, a fatia some de <span class="highlight">todas</span> as pizzas.</li>' +
 				'<li>Errar ou deixar o tempo acabar custa uma vida. O tempo diminui a cada fase.</li>' +
-				'<li>Teclado: <span class="highlight">1-6</span> pizzas, <span class="highlight">Espaço</span> pausa, <span class="highlight">R</span> reinicia, <span class="highlight">M</span> som.</li>' +
+				'<li>Teclado: <span class="highlight">1-6</span> pizzas, <span class="highlight">Espaço</span> pausa, <span class="highlight">Esc</span> sai.</li>' +
 			'</ul>',
-			'JOGAR',
-			start
+			[
+				{ label: 'VOLTAR', action: focusMenu },
+				{ label: 'JOGAR', action: startGame, primary: true }
+			],
+			{ escape: focusMenu }
 		)
 	}
 
@@ -837,7 +1209,7 @@
 			{
 				dismissModal()
 			}
-			else if ((e.key === ' ' || e.key.toLowerCase() === 'p') && game.status === 'paused' && game.modalCancel)
+			else if ((e.key === ' ' || e.key.toLowerCase() === 'p') && game.modal && game.modal.pauseKeys)
 			{
 				// Espaço/P na pausa: volta ao jogo (o "cancelar" é sempre o lado seguro).
 				e.preventDefault()
@@ -852,6 +1224,22 @@
 
 		var key = e.key.toLowerCase()
 
+		if (!el.home.hidden)
+		{
+			if (e.key === 'ArrowDown' || e.key === 'ArrowUp')
+			{
+				e.preventDefault()
+
+				moveMenu(e.key === 'ArrowDown' ? 1 : -1)
+			}
+			else if (key === 'm')
+			{
+				toggleMute()
+			}
+
+			return
+		}
+
 		if (key >= '1' && key <= String(PIZZAS))
 		{
 			onPizzaClick(parseInt(key, 10))
@@ -865,9 +1253,9 @@
 
 			togglePause()
 		}
-		else if (key === 'r')
+		else if (e.key === 'Escape')
 		{
-			requestRestart()
+			requestExit()
 		}
 		else if (key === 'm')
 		{
@@ -886,30 +1274,46 @@
 		el.score = document.getElementById('score')
 		el.record = document.getElementById('record')
 		el.lives = [1, 2, 3].map(function (n) { return document.getElementById('life-' + n) })
-		el.btnPlay = document.getElementById('btn-play')
 		el.btnPause = document.getElementById('btn-pause')
-		el.btnReload = document.getElementById('btn-reload')
-		el.btnSound = document.getElementById('btn-sound')
+		el.btnExit = document.getElementById('btn-exit')
+		el.home = document.getElementById('home')
+		el.game = document.getElementById('game')
+		el.heroPizza = document.getElementById('hero-pizza')
+		el.rain = document.getElementById('rain')
+		el.menu = document.getElementById('menu')
+		el.menuSound = document.getElementById('menu-sound')
+		el.soundState = document.getElementById('sound-state')
+		el.homeRecord = document.getElementById('home-record')
+		el.homeTop = document.getElementById('home-top')
+		el.homeTopName = document.getElementById('home-top-name')
+		el.homeTopScore = document.getElementById('home-top-score')
 		el.modal = document.getElementById('modal')
 		el.modalTitle = document.getElementById('modal-title')
 		el.modalBody = document.getElementById('modal-body')
-		el.modalOk = document.getElementById('modal-ok')
-		el.modalCancel = document.getElementById('modal-cancel')
+		el.modalActions = document.getElementById('modal-actions')
 
 		game.record = parseInt(storageGet(STORAGE_RECORD), 10) || 0
 		game.muted = storageGet(STORAGE_MUTED) === '1'
+		game.playerName = storageGet(STORAGE_NAME) || ''
 
-		el.btnSound.classList.toggle('muted', game.muted)
+		renderSound()
 
 		build()
+		buildHome()
 		reset()
 
-		el.btnPlay.addEventListener('click', onClick(start))
 		el.btnPause.addEventListener('click', onClick(showPause))
-		el.btnReload.addEventListener('click', onClick(requestRestart))
-		el.btnSound.addEventListener('click', onClick(toggleMute))
-		el.modalOk.addEventListener('click', function () { closeModal(true) })
-		el.modalCancel.addEventListener('click', function () { closeModal(false) })
+		el.btnExit.addEventListener('click', onClick(requestExit))
+
+		document.getElementById('menu-play').addEventListener('click', startGame)
+		document.getElementById('menu-help').addEventListener('click', showHelp)
+		document.getElementById('menu-ranking').addEventListener('click', function () { showRanking(focusMenu) })
+		el.menuSound.addEventListener('click', toggleMute)
+
+		// Lembra o item do menu em foco, para devolver o foco ao voltar.
+		el.menu.addEventListener('focusin', function (e) {
+			game.menuIndex = Array.prototype.indexOf.call(el.menu.children, e.target)
+		})
 
 		document.addEventListener('keydown', onKeyDown)
 
@@ -926,7 +1330,7 @@
 
 		requestAnimationFrame(frame)
 
-		showHelp()
+		showHome()
 	}
 
 	document.addEventListener('DOMContentLoaded', init)

@@ -46,7 +46,7 @@
 :root {
 	--u: 240px;
 	--u: max(80px, min(240px, calc((100vw - 32px) / 3)));
-	--u: max(80px, min(240px, calc((100vw - 32px) / 3), calc((100dvh - 76px) / 3)));
+	--u: max(80px, min(240px, calc((100vw - 32px) / 3), calc((100dvh - 48px) / 3)));
 	--p: calc(var(--u) * 5 / 6);
 	--fs: calc(var(--u) / 20);
 
@@ -96,13 +96,13 @@ button:focus-visible {
 	outline-offset: 4px;
 }
 
-.title {
-	margin: 0;
-	height: 60px;
-	line-height: 60px;
-	text-align: center;
-	font-size: clamp(14px, calc(var(--u) / 10), 24px);
-	font-weight: normal;
+/* Tela do jogo: tabuleiro centralizado na vertical */
+.game {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: calc(100dvh - 16px);
+	padding-top: 16px;
 }
 
 /* Tabuleiro: 3 colunas x 6 meias-linhas */
@@ -352,9 +352,147 @@ button:focus-visible {
 	height: 1.1em;
 }
 
-#btn-sound.muted .sound-on,
-#btn-sound:not(.muted) .sound-off {
-	display: none;
+/* Ícone em pixel art: sem suavização, como a fonte */
+.actions svg.pixel {
+	width: 0.95em;
+	height: 0.95em;
+	shape-rendering: crispEdges;
+}
+
+/* Tela inicial */
+
+.home {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: clamp(10px, 2.4dvh, 22px);
+	min-height: calc(100dvh - 16px);
+	padding: 24px 0;
+	text-align: center;
+}
+
+.home > :not(.rain) {
+	position: relative;
+	z-index: 1;
+}
+
+.rain {
+	position: fixed;
+	inset: 0;
+	z-index: 0;
+	overflow: hidden;
+	pointer-events: none;
+}
+
+.rain img {
+	position: absolute;
+	top: 0;
+	height: auto;
+	opacity: 0.12;
+	animation: fall linear infinite;
+}
+
+.home-hero {
+	width: min(220px, 52vw, 30dvh);
+	aspect-ratio: 1;
+	background: radial-gradient(circle, rgba(255, 204, 0, 0.22), transparent 68%);
+	border-radius: 50%;
+}
+
+.hero-pizza {
+	position: relative;
+	width: 100%;
+	height: 100%;
+	background: url('../img/fundo.png') center / contain no-repeat;
+	animation: bob 3s ease-in-out infinite;
+}
+
+.hero-pizza img {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	opacity: 0;
+	animation: hero-slice 7s ease-in infinite;
+	animation-delay: calc(var(--i) * 0.35s);
+}
+
+.home-title {
+	margin: 0;
+	font-size: clamp(30px, 9vw, 64px);
+	font-weight: normal;
+	line-height: 1.1;
+	text-shadow: 4px 4px 0 #B3261E, 8px 8px 0 rgba(255, 204, 0, 0.3);
+}
+
+.home-title span:last-child {
+	color: var(--warn);
+}
+
+.home-tagline {
+	margin: 0;
+	font-size: clamp(9px, 2.6vw, 12px);
+	color: var(--muted);
+}
+
+.menu {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+	margin-top: 8px;
+}
+
+.menu-item {
+	position: relative;
+	padding: 12px 34px;
+	font-size: clamp(13px, 3.8vw, 18px);
+	letter-spacing: 1px;
+	transition: color 0.1s, transform 0.1s;
+}
+
+#menu-play {
+	font-size: clamp(18px, 5.4vw, 26px);
+	color: var(--warn);
+	animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* Setinha de fliperama no item selecionado */
+.menu-item::before {
+	content: '';
+	position: absolute;
+	left: 8px;
+	top: 50%;
+	margin-top: -0.4em;
+	border-top: 0.4em solid transparent;
+	border-bottom: 0.4em solid transparent;
+	border-left: 0.6em solid var(--warn);
+	opacity: 0;
+}
+
+.menu-item:hover,
+.menu-item:focus {
+	outline: none;
+	color: var(--warn);
+}
+
+.menu-item:hover::before,
+.menu-item:focus::before {
+	opacity: 1;
+	animation: blink 0.8s steps(2, jump-none) infinite;
+}
+
+.home-footer {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 8px 24px;
+	margin: 8px 0 0;
+	font-size: clamp(9px, 2.4vw, 11px);
+	color: var(--muted);
+	text-transform: uppercase;
 }
 
 /* Janela de mensagens */
@@ -381,6 +519,7 @@ button:focus-visible {
 
 .modal h2 {
 	margin: 0 0 24px;
+	text-transform: uppercase;
 	font-size: clamp(22px, 7vw, 44px);
 	font-weight: normal;
 	text-shadow: 0 0 90px rgba(200, 200, 200, 0.8);
@@ -408,6 +547,104 @@ button:focus-visible {
 
 .modal-body .stats {
 	margin-top: 20px;
+	color: var(--muted);
+}
+
+/* Ranking */
+
+.rank-form {
+	margin-top: 24px;
+}
+
+.rank-form label {
+	display: block;
+	margin-bottom: 10px;
+}
+
+.rank-form input {
+	width: min(100%, 360px);
+	padding: 12px 14px;
+	border: 2px solid var(--fg);
+	background-color: var(--bg);
+	color: var(--warn);
+	font: inherit;
+	font-size: clamp(12px, 3vw, 16px);
+	text-align: center;
+	text-transform: uppercase;
+	-webkit-user-select: text;
+	user-select: text;
+}
+
+.rank-form input:focus {
+	outline: none;
+	border-color: var(--warn);
+}
+
+.rank-form input::placeholder {
+	color: #555;
+}
+
+.rank-msg {
+	min-height: 1.8em;
+	color: var(--warn);
+}
+
+.ranking {
+	width: min(100%, 420px);
+	margin: 0 auto;
+	border-collapse: collapse;
+	text-transform: uppercase;
+}
+
+.ranking td {
+	padding: 6px 8px;
+	text-align: left;
+}
+
+.ranking td:first-child {
+	width: 4em;
+	color: var(--muted);
+}
+
+.ranking td:last-child {
+	text-align: right;
+}
+
+.ranking tr:nth-child(-n+3) td:first-child {
+	color: var(--warn);
+}
+
+.ranking tr.mine td,
+.ranking tr.mine td:first-child {
+	background-color: var(--warn);
+	color: var(--bg);
+}
+
+.ranking tr[data-position] {
+	cursor: pointer;
+}
+
+.ranking tr[data-position]:not(.mine):hover td,
+.ranking tr[data-position]:not(.mine):focus td {
+	background-color: #222;
+}
+
+.ranking tr[data-position]:focus {
+	outline: 2px dashed var(--warn);
+	outline-offset: -2px;
+}
+
+.ranking.detail tr td:first-child {
+	width: auto;
+	color: var(--muted);
+}
+
+.ranking.detail td:last-child {
+	color: var(--warn);
+}
+
+.ranking tr.gap td {
+	text-align: center;
 	color: var(--muted);
 }
 
@@ -478,13 +715,47 @@ button:focus-visible {
 	from { opacity: 0; transform: scale(0.6); }
 }
 
+@keyframes fall {
+	from { transform: translateY(-120px) rotate(0); }
+	to { transform: translateY(calc(100dvh + 40px)) rotate(var(--spin)); }
+}
+
+@keyframes hero-slice {
+	0% { opacity: 0; transform: translateY(-160%) scale(1.3); }
+	6% { opacity: 1; transform: translateY(0) scale(1); }
+	8% { transform: scale(1.05); }
+	10%, 72% { opacity: 1; transform: none; }
+	82%, 100% { opacity: 0; transform: scale(0.85); }
+}
+
+@keyframes bob {
+	0%, 100% { transform: translateY(0); }
+	50% { transform: translateY(-8px); }
+}
+
+@keyframes pulse {
+	0%, 100% { transform: scale(1); }
+	50% { transform: scale(1.08); }
+}
+
+@keyframes blink {
+	0% { opacity: 1; }
+	100% { opacity: 0.2; }
+}
+
 @keyframes fade {
 	from { opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
 	.shake,
-	.rand.appear {
+	.rand.appear,
+	.hero-pizza,
+	#menu-play {
 		animation: none;
+	}
+
+	.rain {
+		display: none;
 	}
 }
